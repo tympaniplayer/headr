@@ -24,68 +24,89 @@ pub fn get_args() -> MyResult<Config> {
                 .default_value("-"),
         )
         .arg(
-            Arg::new("number")
+            Arg::new("lines")
+                .value_name("LINES")
                 .short('n')
+                .long("lines")
                 .help("print the first n lines of a file instead of 10")
-                .conflicts_with("bytes"),
+                .conflicts_with("bytes")
+                .default_value("10"),
         )
         .arg(
             Arg::new("bytes")
+                .value_name("BYTES")
                 .short('c')
+                .long("bytes")
                 .help("Print bytes of each of the specified files"),
         )
         .get_matches();
+
     let files = matches
         .get_many::<String>("file")
         .unwrap()
         .map(|v| v.to_string())
         .collect();
-    let lines: usize = match matches.get_one::<String>("number") {
-        Some(number) => number.parse::<usize>().unwrap(),
-        None => 10,
-    };
 
-    //let bytes = match matches.get_one::<>()
+    let lines = matches
+        .get_one::<String>("lines")
+        .map(|s| parse_positive_int(s.as_str()))
+        .transpose()
+        .map_err(|e| format!("illegal line count -- {}", e))?;
+
+
+    let bytes = matches
+        .get_one::<String>("bytes")
+        .map(|s| parse_positive_int(s.as_str()))
+        .transpose()
+        .map_err(|e| format!("illegal byte count -- {}", e))?;
 
     Ok(Config {
         files,
-        lines,
-        bytes: match matches.get_one::<String>("bytes") {
-            Some(bytes) => Some(bytes.parse::<usize>().unwrap()),
-            None => None
-        },
+        lines: lines.unwrap(),
+        bytes,
     })
 }
 
-pub fn run (config: Config) -> MyResult<()> {
-    let file_count = config.files.len();
-    let mut current_file = 0;
-    for filename in config.files {
+fn parse_positive_int(val: &str) -> MyResult<usize> {
+    match val.parse() {
+        Ok(n) if n > 0 => Ok(n),
+        _ => Err(From::from(val))
+    }
+}
+
+pub fn run(config: Config) -> MyResult<()> {
+    let num_files = config.files.len();
+    for (file_num, filename) in config.files.iter().enumerate() {
         match open(&filename) {
             Err(err) => eprint!("Failed to open {}: {}", filename, err),
             Ok(mut file) => {
-                if file_count > 0 as usize {
-                    if current_file > 0 {
-                        println!();
-                    }
-                    println!("==> {} <==", filename);
+                if num_files > 1 {
+                    println!(
+                        "{}==> {} <==",
+                        if file_num > 0 { "\n" } else { "" },
+                        filename
+                    )
                 }
-                match config.bytes {
-                    Some(bytes) => {
-                        let mut buffer = vec![0u8; bytes];
-                        file.read(&mut buffer).unwrap();
-                        let content = String::from_utf8(buffer)?;
-                        print!("{}", content);
-                    },
-                    None => {
-                        for line in file.lines().take(config.lines) {
-                            println!("{}", line?);
+                if let Some(num_bytes) = config.bytes {
+                    let mut handle = file.take(num_bytes as u64);
+                    let mut buffer = vec![0; num_bytes];
+                    let bytes_read = handle.read(&mut buffer)?;
+                    print!(
+                        "{}",
+                        String::from_utf8_lossy(&buffer[..bytes_read]));
+                } else {
+                    let mut line = String::new();
+                    for _ in 0..config.lines {
+                        let bytes = file.read_line(&mut line)?;
+                        if bytes == 0 {
+                            break;
                         }
+                        print!("{}", line);
+                        line.clear();
                     }
                 }
             }
         }
-        current_file += 1;
     }
     Ok(())
 }
